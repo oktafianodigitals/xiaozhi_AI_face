@@ -33,12 +33,12 @@ lcd_display_face.cc        ← lcd_display.cc yang dimodifikasi (ganti file asli
 ### 1. Salin file ke proyek
 
 ```
-components/xiaozhi/display/face_engine_lcd.h
-components/xiaozhi/display/face_engine_lcd.cc
+xiaozhi-AI\main\display\face_engine_lcd.h
+xiaozhi-AI\main\display\face_engine_lcd.cc
 
 # Ganti file asli:
-components/xiaozhi/display/lcd_display.h   ← isi dari lcd_display_face.h
-components/xiaozhi/display/lcd_display.cc  ← isi dari lcd_display_face.cc
+xiaozhi-AI\main\display\lcd_display.h   ← isi dari lcd_display_face.h
+xiaozhi-AI\main\display\lcd_display.cc  ← isi dari lcd_display_face.cc
 ```
 
 ### 2. Daftarkan ke CMakeLists.txt
