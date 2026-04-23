@@ -1,363 +1,183 @@
-# FaceEngineLcd — Panduan Lengkap
+# FaceEngineLcd — Panduan Integrasi
 
-Animasi wajah AI untuk **LCD color** (LVGL) pada board `bread-compact-wifi-lcd`.  
-Script ini adalah versi LCD dari `face_engine` yang sebelumnya hanya mendukung OLED 128×64.
+## Gambaran Umum
 
----
+`FaceEngineLcd` menggantikan seluruh UI pada LCD (bar status, emoji, chat
+bubble) dengan animasi wajah tiga-ekspresi yang berjalan murni melalui
+primitif LVGL — tidak ada gambar eksternal, tidak ada font khusus.
 
-## Daftar Isi
+Cocok untuk semua driver yang terdaftar di `bread-compact-wifi-lcd`:
 
-1. [Gambaran Cara Kerja](#cara-kerja)
-2. [File yang Dibuat](#file-yang-dibuat)
-3. [Struktur Proyek Setelah Integrasi](#struktur-proyek)
-4. [Driver LCD yang Didukung](#driver-yang-didukung)
-5. [Langkah Integrasi ke lcd_display.cc](#integrasi)
-6. [Panduan Kalibrasi](#kalibrasi)
-7. [Referensi Nilai Konfigurasi](#referensi-konfigurasi)
-8. [Alur Animasi Per State](#alur-animasi)
-9. [Troubleshooting](#troubleshooting)
+| Bus  | Driver                            | Resolusi umum              |
+|------|-----------------------------------|----------------------------|
+| SPI  | GC9A01, ST7789, ILI9341, ST7796   | 240×240, 320×240, 320×320  |
+| SPI  | ILI9488                           | 480×320                    |
+| RGB  | NT35510, ST7262, EK9716           | 800×480, 480×272           |
+| MIPI | ILI9881C, JD9365DA                | 800×1280, 720×1280         |
 
 ---
 
-## Cara Kerja
+## File yang Disediakan
 
 ```
-lcd_display.cc → SetStatus("listening")
-       ↓
-FaceEngineLcd::SetState(FaceStateLcd::Listening)
-       ↓
-LVGL Timer (setiap 40ms) → FaceEngineLcd::Update()
-       ↓
-ListeningBehavior(eye_h) → ubah ukuran & posisi LVGL object
-       ↓
-LVGL refresh → tampil di LCD
-```
-
-Seluruh animasi berjalan lewat **LVGL timer** yang dipasang saat `Init()`.  
-Tidak ada loop manual — tidak mengganggu FreeRTOS task lain.
-
-### Tiga State Animasi
-
-| State | Mata | Mulut | Keterangan |
-|---|---|---|---|
-| **Idle** | Bergerak pelan (drift), berkedip acak | Tipis, diam | Standby / menunggu |
-| **Listening** | Asimetris (kanan lebih besar) | Kecil, sedikit ke kiri | Sedang mendengarkan user |
-| **Speaking** | Stabil | Bergerak naik-turun acak | AI sedang berbicara |
-
----
-
-## File yang Dibuat
-
-| File | Fungsi |
-|---|---|
-| `display/face_engine_lcd.h` | Header: deklarasi class, struct konfigurasi, enum state |
-| `display/face_engine_lcd.cc` | Implementasi: animasi + fungsi konfigurasi per driver |
-
----
-
-## Struktur Proyek
-
-Setelah integrasi, tempatkan file di:
-
-```
-xiaozhi-esp32/
-└── main/
-    └── display/
-        ├── face_engine_lcd.h       ← baru
-        ├── face_engine_lcd.cc      ← baru
-        ├── face_engine.h           (OLED, tidak diubah)
-        ├── face_engine.cc          (OLED, tidak diubah)
-        ├── lcd_display.h           (perlu sedikit tambahan — lihat bagian Integrasi)
-        └── lcd_display.cc          (perlu tambahan SetStatus + Init — lihat Integrasi)
+face_engine_lcd.h          ← header utama + semua CALIBRATION macro
+face_engine_lcd.cc         ← implementasi animasi
+lcd_display_face.h         ← lcd_display.h yang dimodifikasi (ganti file asli)
+lcd_display_face.cc        ← lcd_display.cc yang dimodifikasi (ganti file asli)
 ```
 
 ---
 
-## Driver yang Didukung
+## Langkah Integrasi
 
-Script ini memiliki konfigurasi bawaan untuk semua driver di `bread-compact-wifi-lcd/config.h`:
+### 1. Salin file ke proyek
 
-| Makro `config.h` | Driver | Resolusi |
-|---|---|---|
-| `CONFIG_LCD_ST7789_240X320` | ST7789 | 240 × 320 |
-| `CONFIG_LCD_ST7789_240X320_NO_IPS` | ST7789 | 240 × 320 |
-| `CONFIG_LCD_ST7789_170X320` | ST7789 | 170 × 320 |
-| `CONFIG_LCD_ST7789_172X320` | ST7789 | 172 × 320 |
-| `CONFIG_LCD_ST7789_240X280` | ST7789 | 240 × 280 |
-| `CONFIG_LCD_ST7789_240X240` | ST7789 | 240 × 240 |
-| `CONFIG_LCD_ST7789_240X240_7PIN` | ST7789 | 240 × 240 |
-| `CONFIG_LCD_ST7789_240X135` | ST7789 | 240 × 135 |
-| `CONFIG_LCD_ST7735_128X160` | ST7735 | 128 × 160 |
-| `CONFIG_LCD_ST7735_128X128` | ST7735 | 128 × 128 |
-| `CONFIG_LCD_ST7796_320X480` | ST7796 | 320 × 480 |
-| `CONFIG_LCD_ST7796_320X480_NO_IPS` | ST7796 | 320 × 480 |
-| `CONFIG_LCD_ILI9341_240X320` | ILI9341 | 240 × 320 |
-| `CONFIG_LCD_ILI9341_240X320_NO_IPS` | ILI9341 | 240 × 320 |
-| `CONFIG_LCD_GC9A01_240X240` | GC9A01 | 240 × 240 (bulat) |
-| `CONFIG_LCD_CUSTOM` | Custom | Otomatis proporsional |
+```
+components/xiaozhi/display/face_engine_lcd.h
+components/xiaozhi/display/face_engine_lcd.cc
 
----
-
-## Integrasi
-
-### 1. Tambahkan include di `lcd_display.cc`
-
-Di bagian paling atas `lcd_display.cc`, tambahkan:
-
-```cpp
-#include "face_engine_lcd.h"
+# Ganti file asli:
+components/xiaozhi/display/lcd_display.h   ← isi dari lcd_display_face.h
+components/xiaozhi/display/lcd_display.cc  ← isi dari lcd_display_face.cc
 ```
 
-### 2. Tambahkan variabel instance di dalam class LcdDisplay (di `lcd_display.h`)
+### 2. Daftarkan ke CMakeLists.txt
 
-Di dalam `class LcdDisplay` (section `protected` atau `private`):
-
-```cpp
-// Tambahkan di lcd_display.h, dalam class LcdDisplay
-FaceEngineLcd* face_engine_lcd_ = nullptr;
-```
-
-### 3. Inisialisasi di `LcdDisplay::SetupUI()`
-
-Temukan fungsi `SetupUI()` di `lcd_display.cc`. Di bagian akhir fungsi tersebut (setelah semua widget dibuat), tambahkan:
-
-```cpp
-// ── Inisialisasi FaceEngineLcd ──────────────────────────────────────────
-// Pilih area tampilan wajah: bisa menggunakan emoji_box_ atau container_
-// Ganti emoji_box_ dengan objek LVGL mana pun yang jadi "kanvas" wajah Anda
-
-FaceLcdConfig face_cfg = FaceEngineLcd::MakeDefaultConfig(width_, height_);
-
-// OPSIONAL: override warna agar sesuai tema aktif
-auto* lvgl_theme = static_cast<LvglTheme*>(current_theme_);
-face_cfg.color_bg    = lvgl_theme->background_color();
-face_cfg.color_eye   = lvgl_theme->text_color();
-face_cfg.color_mouth = lvgl_theme->text_color();
-
-face_engine_lcd_ = new FaceEngineLcd();
-face_engine_lcd_->Init(emoji_box_, face_cfg);
-// ────────────────────────────────────────────────────────────────────────
-```
-
-> **Catatan:** `emoji_box_` adalah objek centered di layar pada SetupUI() default.  
-> Jika Anda ingin wajah tampil di area lain, ganti dengan objek LVGL yang sesuai.
-
-### 4. Tambahkan `SetStatus()` di `lcd_display.cc`
-
-Tambahkan fungsi ini (override dari class Display) ke dalam `lcd_display.cc`:
-
-```cpp
-#include "assets/lang_config.h"   // pastikan sudah ada
-
-void LcdDisplay::SetStatus(const char* status) {
-    // Teruskan ke base class untuk logging & logika lain
-    Display::SetStatus(status);
-
-    if (!face_engine_lcd_) return;
-
-    if (strcmp(status, Lang::Strings::STANDBY) == 0) {
-        face_engine_lcd_->SetState(FaceStateLcd::Idle);
-    } else if (strcmp(status, Lang::Strings::LISTENING) == 0) {
-        face_engine_lcd_->SetState(FaceStateLcd::Listening);
-    } else if (strcmp(status, Lang::Strings::SPEAKING) == 0) {
-        face_engine_lcd_->SetState(FaceStateLcd::Speaking);
-    } else {
-        face_engine_lcd_->SetState(FaceStateLcd::Idle);
-    }
-}
-```
-
-### 5. Deklarasikan `SetStatus()` di `lcd_display.h`
-
-Di dalam `class LcdDisplay`, tambahkan:
-
-```cpp
-virtual void SetStatus(const char* status) override;
-```
-
-### 6. Daftarkan file ke CMakeLists.txt
-
-Di file `CMakeLists.txt` (di dalam folder `display/` atau folder parent-nya):
+Pastikan `face_engine_lcd.cc` masuk ke daftar sources:
 
 ```cmake
-set(SOURCES
-    ...
-    "display/face_engine_lcd.cc"   # tambahkan baris ini
-    ...
+idf_component_register(
+    SRCS
+        "display/face_engine_lcd.cc"
+        "display/lcd_display.cc"
+        # ... file lain ...
+    INCLUDE_DIRS "display"
+    REQUIRES lvgl esp_lvgl_port esp_lcd esp_timer esp_psram
 )
 ```
 
----
+### 3. Tidak ada perubahan pada board file
 
-## Kalibrasi
+`SpiLcdDisplay`, `RgbLcdDisplay`, dan `MipiLcdDisplay` mempertahankan
+signature konstruktor yang sama persis sehingga board file (mis.
+`bread_compact_wifi_lcd.cc`) **tidak perlu diubah**.
 
-### Kalibrasi Cepat (disarankan)
+### 4. Hubungkan state dari application logic
 
-Buka `face_engine_lcd.cc` dan temukan fungsi konfigurasi yang sesuai driver Anda.  
-Contoh: jika menggunakan ST7789 240×320, cari `MakeConfig_ST7789_240x320()`.
-
-Ubah nilai-nilai di dalam fungsi tersebut, lalu compile & flash.  
-**Tidak ada kode lain yang perlu diubah.**
-
-### Parameter yang Paling Sering Dikalibrasi
-
-```
-eye_size        → ukuran dasar mata (px)
-eye_gap         → jarak antara kedua mata
-eye_offset_y    → posisi vertikal mata (negatif = ke atas)
-mouth_offset_y  → posisi vertikal mulut (positif = ke bawah)
-mouth_idle_w    → lebar mulut saat idle
-mouth_speak_w   → lebar mulut saat speaking
-speak_h_large   → tinggi maksimum mulut saat speaking
-color_eye       → warna mata (ganti dengan lv_color_hex(0xRRGGBB))
-color_bg        → warna background wajah
-```
-
-### Menambahkan Driver LCD Baru
-
-1. Buat fungsi konfigurasi baru di `face_engine_lcd.cc`:
+Panggil `SetFaceState()` kapan pun state AI berubah:
 
 ```cpp
-static FaceLcdConfig MakeConfig_DriverBaru_WxH() {
-    FaceLcdConfig c;
-    c.canvas_w = W;
-    c.canvas_h = H;
-    // ... isi semua nilai
-    return c;
-}
+// Di mana pun Anda mendapat pointer ke display:
+auto* lcd = static_cast<LcdDisplay*>(Board::GetInstance().display());
+
+// Saat mulai mendengarkan input pengguna:
+lcd->SetFaceState(FaceState::Listening);
+
+// Saat AI sedang bicara / merespons:
+lcd->SetFaceState(FaceState::Speaking);
+
+// Saat idle / menunggu:
+lcd->SetFaceState(FaceState::Idle);
 ```
 
-2. Tambahkan entry di `FaceEngineLcd::MakeDefaultConfig()`:
+`SetEmotion()` (dipanggil oleh firmware xiaozhi secara internal) sudah
+memetakan string ke `FaceState`:
+
+| emotion string              | FaceState          |
+|-----------------------------|--------------------|
+| `"listening"`               | `Listening`        |
+| `"speaking"`, `"thinking"`, `"loading"` | `Speaking` |
+| semua lainnya / `"idle"`    | `Idle`             |
+
+---
+
+## Kalibrasi untuk Driver / Ukuran Berbeda
+
+Semua nilai proporsional ada di bagian **CALIBRATION** pada `face_engine_lcd.h`.
+Ubah makro di sana; tidak ada kode lain yang perlu disentuh.
 
 ```cpp
-#elif defined(CONFIG_LCD_DRIVER_BARU)
-    return MakeConfig_DriverBaru_WxH();
+// ---- CONTOH untuk GC9A01 240×240 (bulat) ----
+#define FACE_EYE_SIZE_RATIO       0.20f   // 20% dari 240 → mata 48 px
+#define FACE_EYE_SPACING_X_RATIO  0.22f   // jarak antar mata
+#define FACE_EYE_OFFSET_Y_RATIO  -0.12f   // mata sedikit ke atas centre
+
+// ---- CONTOH untuk ILI9341 320×240 (landscape) ----
+#define FACE_EYE_SIZE_RATIO       0.22f   // ref = min(320,240)=240 → 52 px
+#define FACE_EYE_SPACING_X_RATIO  0.20f
+#define FACE_EYE_OFFSET_Y_RATIO  -0.10f
+#define FACE_MOUTH_WIDTH_RATIO    0.15f   // mulut sedikit lebih sempit
+
+// ---- CONTOH untuk NT35510 800×480 (landscape besar) ----
+#define FACE_EYE_SIZE_RATIO       0.18f   // ref = 480 → 86 px
+#define FACE_EYE_SPACING_X_RATIO  0.21f
+#define FACE_EYE_OFFSET_Y_RATIO  -0.11f
+#define FACE_IRIS_SIZE_RATIO      0.50f   // iris sedikit lebih kecil relatif
 ```
 
-3. Tambahkan makro yang sesuai di `config.h` board Anda.
+### Referensi seluruh makro
+
+| Makro                       | Default  | Keterangan                                        |
+|-----------------------------|----------|---------------------------------------------------|
+| `FACE_EYE_SIZE_RATIO`       | 0.20     | Tinggi mata ÷ min(w,h)                            |
+| `FACE_EYE_SPACING_X_RATIO`  | 0.22     | Jarak pusat mata ke tengah layar ÷ min(w,h)       |
+| `FACE_EYE_OFFSET_Y_RATIO`   | −0.12    | Offset vertikal mata (negatif = ke atas)           |
+| `FACE_EYE_ASPECT_RATIO`     | 0.75     | Lebar mata = tinggi × ratio (< 1 = lonjong)       |
+| `FACE_EYE_RADIUS_RATIO`     | 0.20     | Radius sudut mata ÷ tinggi mata                   |
+| `FACE_MOUTH_WIDTH_RATIO`    | 0.18     | Lebar mulut ÷ lebar layar                         |
+| `FACE_MOUTH_OFFSET_Y_RATIO` | 0.28     | Jarak mulut ke bawah dari tengah layar            |
+| `FACE_MOUTH_RADIUS_RATIO`   | 0.35     | Radius sudut mulut ÷ tinggi mulut                 |
+| `FACE_ENABLE_IRIS`          | 1        | 1 = gambar iris+pupil berwarna, 0 = mata polos    |
+| `FACE_IRIS_SIZE_RATIO`      | 0.55     | Diameter iris ÷ tinggi mata                       |
+| `FACE_PUPIL_SIZE_RATIO`     | 0.45     | Diameter pupil ÷ diameter iris                    |
+| `FACE_UPDATE_INTERVAL_MS`   | 50       | Interval timer LVGL (ms) ≈ framerate              |
+| `FACE_BLINK_PERIOD_FRAMES`  | 120      | Rata-rata frame antara kedip                      |
+| `FACE_SPEAK_UPDATE_MIN_MS`  | 80       | Interval minimum perubahan target mulut (ms)      |
+| `FACE_SPEAK_UPDATE_RAND_MS` | 60       | Rentang random tambahan (ms)                      |
+| `FACE_IDLE_DRIFT_PERIOD_FRAMES` | 40   | Frame antara perpindahan gaze idle                |
+
+### Warna
+
+```cpp
+#define FACE_COLOR_BACKGROUND  lv_color_hex(0x000000)  // hitam
+#define FACE_COLOR_FEATURE     lv_color_hex(0xFFFFFF)  // mata & mulut putih
+#define FACE_COLOR_IRIS        lv_color_hex(0x00BFFF)  // biru terang
+#define FACE_COLOR_PUPIL       lv_color_hex(0x000000)  // hitam
+```
+
+Untuk layar bulat (GC9A01) atau panel AMOLED, latar hitam penuh
+menghasilkan kontras paling tajam dan hemat daya.
 
 ---
 
-## Referensi Konfigurasi
-
-### FaceLcdConfig — semua field
-
-| Field | Tipe | Default (240×320) | Keterangan |
-|---|---|---|---|
-| `canvas_w` | `int` | 240 | Lebar area wajah (px) |
-| `canvas_h` | `int` | 320 | Tinggi area wajah (px) |
-| `eye_size` | `int` | 60 | Ukuran mata default |
-| `eye_radius` | `int` | 10 | Radius sudut mata (0=kotak) |
-| `eye_gap` | `int` | 30 | Jarak pusat ke pinggir mata |
-| `eye_offset_y` | `int` | -50 | Offset Y mata dari center |
-| `mouth_offset_y` | `int` | 80 | Offset Y mulut dari center |
-| `mouth_idle_w` | `int` | 80 | Lebar mulut Idle |
-| `mouth_idle_h` | `int` | 14 | Tinggi mulut Idle |
-| `mouth_idle_r` | `int` | 7 | Radius mulut Idle |
-| `mouth_listen_w` | `int` | 40 | Lebar mulut Listening |
-| `mouth_listen_h` | `int` | 8 | Tinggi mulut Listening |
-| `mouth_listen_r` | `int` | 4 | Radius mulut Listening |
-| `mouth_speak_w` | `int` | 65 | Lebar mulut Speaking |
-| `mouth_speak_r` | `int` | 16 | Radius mulut Speaking |
-| `speak_h_small` | `int` | 8 | Tinggi mulut kecil (speaking) |
-| `speak_h_mid1` | `int` | 24 | Tinggi mulut medium 1 |
-| `speak_h_mid2` | `int` | 42 | Tinggi mulut medium 2 |
-| `speak_h_large` | `int` | 60 | Tinggi mulut maksimum |
-| `speak_step` | `int` | 6 | Langkah smooth mouth per frame |
-| `speak_interval_base` | `int` | 80 | Interval min pergantian target (ms) |
-| `speak_interval_rand` | `int` | 80 | Rentang acak tambahan (ms) |
-| `idle_drift_x` | `int` | 10 | Maksimum drift X mata (px) |
-| `idle_drift_y` | `int` | 6 | Maksimum drift Y mata (px) |
-| `idle_drift_chance` | `int` | 35 | 1-dari-N peluang drift baru |
-| `blink_chance` | `int` | 100 | 1-dari-N peluang mulai kedip |
-| `eye_blink_h1` | `int` | 10 | Tinggi mata fase kedip 1 |
-| `eye_blink_h2` | `int` | 1 | Tinggi mata fase kedip 2 (tertutup) |
-| `eye_blink_h3` | `int` | 18 | Tinggi mata fase buka kembali |
-| `color_eye` | `lv_color_t` | white | Warna mata |
-| `color_mouth` | `lv_color_t` | white | Warna mulut |
-| `color_bg` | `lv_color_t` | black | Warna background |
-| `update_interval_ms` | `uint32_t` | 40 | Interval timer animasi (ms) |
-
----
-
-## Alur Animasi
+## Cara Kerja Animasi
 
 ### Idle
-
-```
-Update() setiap 40ms
-  ↓
-blink_phase_: 0 → periksa peluang kedip (1/100)
-  ↓ (jika kedip)
-frame 1: eye_h = eye_blink_h1  (setengah tutup)
-frame 2: eye_h = eye_blink_h2  (tutup)
-frame 3: eye_h = eye_blink_h3  (buka)
-frame 4+: eye_h = eye_size     (normal)
-  ↓
-IdleBehavior(eye_h):
-  - drift baru dipilih acak (peluang 1/idle_drift_chance)
-  - mata bergerak ke posisi drift
-  - mulut diam di mouth_idle_*
-```
+- Kedua mata ukuran penuh, sedikit di atas tengah layar.
+- Setiap ~2 detik gaze drift acak (offset ±4% layar).
+- Iris mengikuti arah pandang.
+- Mulut tipis horizontal.
+- Kedip acak ~6 detik sekali (3 frame: tutup sebagian → hampir tutup → buka cepat).
 
 ### Listening
-
-```
-Update() setiap 40ms
-  ↓ (blink tetap berjalan)
-ListeningBehavior(eye_h):
-  - mata kiri: height - eye_size/8  (lebih kecil)
-  - mata kanan: height normal
-  - mulut: mouth_listen_* (kecil, sedikit ke kiri)
-```
+- Mata kanan sedikit lebih besar dari kiri (asimetri "penasaran/memperhatikan").
+- Kedua mata terpusat, tidak ada gaze drift.
+- Mulut sangat tipis dan sempit (ekspresi fokus).
+- Kedip tetap aktif.
 
 ### Speaking
-
-```
-Update() setiap 40ms
-  ↓ (blink tetap berjalan)
-SpeakingBehavior(eye_h):
-  - setiap speak_interval ms: pilih speak_target_h_ acak
-  - speak_current_h_ ± speak_step mendekati target (smooth)
-  - mulut: width=mouth_speak_w, height=speak_current_h_
-```
+- Kedua mata ukuran penuh, simetris.
+- Tinggi mulut beranimasi acak antara hampir tutup → terbuka penuh.
+- Transisi mulut smooth (interpolasi per-frame).
+- Kedip tetap aktif.
 
 ---
 
-## Troubleshooting
+## Kompatibilitas
 
-**Wajah tidak muncul / layar gelap**  
-→ Pastikan `SetupUI()` sudah dipanggil sebelum `Init()`  
-→ Cek parent object yang dilewatkan ke `Init()` tidak `nullptr`
-
-**Wajah terlalu besar / terpotong**  
-→ Kecilkan `eye_size`, `eye_gap`, dan `mouth_*_w` di fungsi MakeConfig  
-→ Sesuaikan `eye_offset_y` dan `mouth_offset_y`
-
-**Animasi terlalu cepat / lambat**  
-→ Ubah `update_interval_ms` (lebih besar = lebih lambat)  
-→ Untuk speaking: ubah `speak_step` dan `speak_interval_base`
-
-**Kedipan terlalu sering / jarang**  
-→ Ubah `blink_chance`: lebih kecil = lebih sering, lebih besar = lebih jarang
-
-**Error compile: `Lang::Strings::STANDBY` tidak ditemukan**  
-→ Pastikan `#include "assets/lang_config.h"` ada di lcd_display.cc  
-→ Cek file lang_config.h di proyek Anda untuk nama string yang tepat
-
-**Wajah tidak berubah state saat berbicara**  
-→ Pastikan `SetStatus()` terhubung ke state machine di `application.cc`  
-→ Tambahkan log: `ESP_LOGI(TAG, "SetStatus: %s", status)` untuk debug
-
-**GC9A01 (layar bulat): wajah terpotong di sudut**  
-→ Kecilkan `eye_size` dan `mouth_*_w`  
-→ Geser `eye_offset_y` dan `mouth_offset_y` lebih mendekati 0  
-
----
-
-## Catatan Penting
-
-- `FaceEngineLcd` dan `FaceEngine` (OLED) **dapat berjalan bersamaan** di proyek yang berbeda. Keduanya menggunakan enum name berbeda (`FaceStateLcd` vs `FaceState`) untuk menghindari konflik.
-- Instance `FaceEngineLcd` di-`new` di heap — pastikan tidak di-`delete` selama program berjalan.
-- Semua operasi LVGL di dalam engine sudah di dalam LVGL task context (via timer), sehingga **thread-safe terhadap LVGL**.
-- Untuk mengubah warna wajah saat runtime (misalnya ikut tema), gunakan `face_engine_lcd_->GetConfig()` atau buat ulang dengan `Init()` — namun `Init()` sebaiknya hanya dipanggil sekali.
+- **LVGL v8 dan v9** — menggunakan API publik standar (`lv_obj_create`,
+  `lv_obj_set_pos`, `lv_timer_create`, dll.).
+- **ESP-IDF ≥ 5.0**.
+- **Semua `esp_lcd` driver** yang terdaftar via `SpiLcdDisplay`,
+  `RgbLcdDisplay`, atau `MipiLcdDisplay`.
+- Tidak ada dependensi gambar, font, atau GIF.

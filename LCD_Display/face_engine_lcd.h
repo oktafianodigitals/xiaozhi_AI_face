@@ -1,219 +1,172 @@
 #pragma once
 
-/**
- * @file face_engine_lcd.h
- * @brief FaceEngineLcd - Animasi wajah untuk LCD color (LVGL) berbasis face_engine OLED
- *
- * Kompatibel dengan semua driver LCD pada bread-compact-wifi-lcd:
- *   ST7789 (berbagai resolusi), ST7735, ST7796, ILI9341, GC9A01
- *
- * Mendukung tiga kondisi animasi:
- *   - Idle    : Mata berkedip acak, gerakan halus, mulut tipis
- *   - Listening: Mata asimetris (pendengar), mulut kecil
- *   - Speaking : Animasi mulut bergerak sesuai irama bicara
- *
- * ─── KALIBRASI CEPAT ───────────────────────────────────────────────────────
- *  Ubah hanya blok FACE_LCD_CONFIG di file face_engine_lcd.cc untuk menyesuaikan
- *  ukuran, posisi, dan warna sesuai resolusi LCD yang digunakan.
- * ────────────────────────────────────────────────────────────────────────────
- */
-
 #include <lvgl.h>
 #include <stdint.h>
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  ENUM STATE — sama persis dengan face_engine OLED agar drop-in compatible
-// ═══════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// FaceEngineLcd - Animated face engine for color LCD displays
+// Compatible with: SpiLcdDisplay, RgbLcdDisplay, MipiLcdDisplay
+// Supported drivers: GC9A01, ST7789, ILI9341, ST7796, ILI9488, NT35510, etc.
+// =============================================================================
+//
+// CALIBRATION GUIDE:
+// ------------------
+// All dimension values are expressed as PERCENTAGES of the display size,
+// so the face scales automatically for any resolution (240x240, 320x240,
+// 480x320, 800x480, etc.).
+//
+// To tune for your specific driver / screen size, adjust only the constants
+// in the "CALIBRATION" section below.  No other code needs to change.
+//
+// =============================================================================
 
-/**
- * @brief Tiga kondisi utama ekspresi wajah AI.
- *
- * Nilai enum ini sengaja identik dengan FaceState di face_engine.h
- * sehingga kode pemanggil (lcd_display.cc) tidak perlu diubah.
- */
-enum class FaceStateLcd {
-    Idle,       ///< Standby — mata bergerak pelan, mulut diam
-    Listening,  ///< Mendengarkan — mata asimetris menunjukkan perhatian
-    Speaking    ///< Berbicara — mulut beranimasi sesuai irama bicara
-};
+// ---------------------------------------------------------------------------
+// CALIBRATION: Eye geometry  (values = % of display dimension, 0.0 – 1.0)
+// ---------------------------------------------------------------------------
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  KONFIGURASI KALIBRASI — edit di face_engine_lcd.cc, bukan di sini
-// ═══════════════════════════════════════════════════════════════════════════
+// Fraction of the shorter display dimension used as the base eye size
+#define FACE_EYE_SIZE_RATIO         0.20f   // eye height when fully open
 
-/**
- * @brief Struktur konfigurasi semua parameter visual FaceEngineLcd.
- *
- * Diisi satu kali di face_engine_lcd.cc melalui FaceEngineLcd::Init().
- * Pisahkan konfigurasi per resolusi/driver di lcd_display.cc sebelum memanggil Init().
- *
- * CONTOH penggunaan di lcd_display.cc:
- * @code
- *   FaceLcdConfig cfg;
- *   cfg.canvas_w = DISPLAY_WIDTH;
- *   cfg.canvas_h = DISPLAY_HEIGHT;
- *   // ... sesuaikan nilai lain
- *   face_engine_lcd_->Init(content_, cfg);
- * @endcode
- */
-struct FaceLcdConfig {
+// Horizontal distance between each eye centre and the screen centre
+//   increase → eyes further apart
+#define FACE_EYE_SPACING_X_RATIO   0.22f
 
-    // ── Dimensi kanvas (diisi otomatis dari DISPLAY_WIDTH/HEIGHT) ──────────
-    int canvas_w = 240;   ///< Lebar area wajah dalam piksel
-    int canvas_h = 240;   ///< Tinggi area wajah dalam piksel
+// Vertical offset of eye centres from screen centre (negative = up)
+#define FACE_EYE_OFFSET_Y_RATIO   -0.12f
 
-    // ── Ukuran mata ────────────────────────────────────────────────────────
-    int eye_size       = 50;   ///< Ukuran mata default (tinggi & lebar)
-    int eye_radius     = 8;    ///< Sudut membulat mata (px); 0 = kotak, besar = oval
-    int eye_gap        = 20;   ///< Jarak antara kedua mata (piksel tambahan dari tengah)
+// Eye width = height * this ratio (1.0 = square, <1.0 = taller than wide)
+#define FACE_EYE_ASPECT_RATIO       0.75f
 
-    // ── Posisi vertikal mata & mulut (relatif terhadap tengah kanvas) ──────
-    int eye_offset_y   = -30;  ///< Offset Y mata dari center (negatif = ke atas)
-    int mouth_offset_y =  50;  ///< Offset Y mulut dari center (positif = ke bawah)
+// Corner radius of each eye rectangle (pixels, relative to eye height)
+#define FACE_EYE_RADIUS_RATIO       0.20f
 
-    // ── Ukuran mulut ───────────────────────────────────────────────────────
-    int mouth_idle_w   = 60;   ///< Lebar mulut saat Idle
-    int mouth_idle_h   = 12;   ///< Tinggi mulut saat Idle
-    int mouth_idle_r   = 6;    ///< Radius mulut Idle
+// ---------------------------------------------------------------------------
+// CALIBRATION: Mouth geometry
+// ---------------------------------------------------------------------------
 
-    int mouth_listen_w = 30;   ///< Lebar mulut saat Listening
-    int mouth_listen_h =  6;   ///< Tinggi mulut saat Listening
-    int mouth_listen_r = 3;    ///< Radius mulut Listening
+// Mouth width as fraction of display width
+#define FACE_MOUTH_WIDTH_RATIO      0.18f
 
-    int mouth_speak_w  = 50;   ///< Lebar mulut saat Speaking
-    int mouth_speak_r  = 14;   ///< Radius mulut Speaking (membuat tampak oval)
+// Mouth Y offset from screen centre (positive = below centre)
+#define FACE_MOUTH_OFFSET_Y_RATIO   0.28f
 
-    // ── Target tinggi mulut saat speaking (dipilih acak) ──────────────────
-    int speak_h_small  =  8;   ///< Mulut hampir tertutup
-    int speak_h_mid1   = 20;   ///< Mulut setengah terbuka
-    int speak_h_mid2   = 36;   ///< Mulut terbuka sedang
-    int speak_h_large  = 55;   ///< Mulut terbuka lebar
+// Mouth corner radius
+#define FACE_MOUTH_RADIUS_RATIO     0.35f   // fraction of mouth height
 
-    // ── Kecepatan animasi speaking ─────────────────────────────────────────
-    int speak_step      = 4;   ///< Langkah perubahan mouth_current per frame (px)
-    int speak_interval_base = 80;  ///< Interval minimum antar perubahan target (ms)
-    int speak_interval_rand = 80;  ///< Rentang acak tambahan interval (ms)
+// ---------------------------------------------------------------------------
+// CALIBRATION: Colors  (RGB565 hex – use any standard color picker)
+// ---------------------------------------------------------------------------
 
-    // ── Gerakan idle (eye drift) ────────────────────────────────────────────
-    int idle_drift_x   = 6;   ///< Maksimum drift horizontal mata saat Idle (px)
-    int idle_drift_y   = 4;   ///< Maksimum drift vertikal mata saat Idle (px)
-    int idle_drift_chance = 30; ///< 1-dari-N peluang memilih posisi drift baru per frame
+// Background fill (set to 0x000000 for black, 0xFFFFFF for white)
+#define FACE_COLOR_BACKGROUND       lv_color_hex(0x000000)
 
-    // ── Kedipan (blink) ────────────────────────────────────────────────────
-    int blink_chance   = 100;  ///< 1-dari-N peluang mulai kedip per frame
-    int eye_blink_h1   =  8;   ///< Tinggi mata fase kedip 1 (setengah menutup)
-    int eye_blink_h2   =  1;   ///< Tinggi mata fase kedip 2 (tertutup)
-    int eye_blink_h3   = 14;   ///< Tinggi mata fase kedip 3 (membuka kembali)
+// Eye / mouth fill color
+#define FACE_COLOR_FEATURE          lv_color_hex(0xFFFFFF)
 
-    // ── Warna elemen (RGB565-compatible, dikonversi lewat lv_color_hex) ────
-    lv_color_t color_eye   = lv_color_white();   ///< Warna mata
-    lv_color_t color_mouth = lv_color_white();   ///< Warna mulut
-    lv_color_t color_bg    = lv_color_black();   ///< Warna background kanvas
+// Iris accent color (drawn on top of eye; set same as feature to disable)
+#define FACE_COLOR_IRIS             lv_color_hex(0x00BFFF)
 
-    // ── Timer update interval ──────────────────────────────────────────────
-    uint32_t update_interval_ms = 40; ///< Interval refresh animasi (ms) — ~25 fps
-};
+// Pupil color
+#define FACE_COLOR_PUPIL            lv_color_hex(0x000000)
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  CLASS FaceEngineLcd
-// ═══════════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
+// CALIBRATION: Iris & pupil
+// ---------------------------------------------------------------------------
 
-/**
- * @brief Engine animasi wajah untuk LCD color LVGL.
- *
- * Cara pakai:
- *  1. Buat instance: FaceEngineLcd* face = new FaceEngineLcd();
- *  2. Siapkan konfigurasi: FaceLcdConfig cfg = MakeConfigForDisplay(w, h);
- *  3. Inisialisasi: face->Init(parent_obj, cfg);
- *  4. Ubah state: face->SetState(FaceStateLcd::Speaking);
- *  5. Update dipanggil otomatis oleh LVGL timer — tidak perlu loop manual.
- */
+// Draw iris accent circle?  1 = yes, 0 = no (plain white eye)
+#define FACE_ENABLE_IRIS            1
+
+// Iris diameter as fraction of eye height
+#define FACE_IRIS_SIZE_RATIO        0.55f
+
+// Pupil diameter as fraction of iris diameter
+#define FACE_PUPIL_SIZE_RATIO       0.45f
+
+// ---------------------------------------------------------------------------
+// CALIBRATION: Animation timing  (milliseconds)
+// ---------------------------------------------------------------------------
+
+// How often Update() is called by the LVGL timer
+#define FACE_UPDATE_INTERVAL_MS     50      // ~20 fps
+
+// Blink: average frames between blinks (at 20 fps → ~6 s avg)
+#define FACE_BLINK_PERIOD_FRAMES    120
+
+// Speaking: how often the mouth target changes (ms)
+#define FACE_SPEAK_UPDATE_MIN_MS    80
+#define FACE_SPEAK_UPDATE_RAND_MS   60
+
+// Idle: how often gaze drifts
+#define FACE_IDLE_DRIFT_PERIOD_FRAMES 40
+
+// ---------------------------------------------------------------------------
+// FaceState – mirrors the original enum so callers use the same API
+// ---------------------------------------------------------------------------
+enum class FaceState { Idle, Listening, Speaking };
+
+// ---------------------------------------------------------------------------
+// FaceEngineLcd class
+// ---------------------------------------------------------------------------
 class FaceEngineLcd {
 public:
-    /**
-     * @brief Inisialisasi engine: buat objek LVGL dan mulai timer animasi.
-     * @param parent   Parent LVGL object (biasanya content_ dari LcdDisplay)
-     * @param config   Konfigurasi kalibrasi visual (lihat FaceLcdConfig)
-     */
-    void Init(lv_obj_t* parent, const FaceLcdConfig& config);
+    // Call once after the LcdDisplay has called SetupUI().
+    // parent   : pass lv_screen_active() or any full-screen lv_obj
+    // width    : display width  in pixels  (LV_HOR_RES)
+    // height   : display height in pixels  (LV_VER_RES)
+    void Init(lv_obj_t* parent, int width, int height);
 
-    /**
-     * @brief Ubah state animasi wajah.
-     * @param state  FaceStateLcd::Idle / Listening / Speaking
-     */
-    void SetState(FaceStateLcd state);
+    // Change the current animation state
+    void SetState(FaceState state);
 
-    /**
-     * @brief Kembalikan state saat ini.
-     */
-    FaceStateLcd GetState() const { return state_; }
-
-    /**
-     * @brief Akses konfigurasi aktif (untuk debugging / hot-reconfigure).
-     */
-    const FaceLcdConfig& GetConfig() const { return cfg_; }
-
-    /**
-     * @brief Update satu frame — dipanggil oleh LVGL timer, JANGAN panggil manual.
-     *
-     * Fungsi ini bersifat public agar bisa diakses oleh lambda timer LVGL.
-     */
+    // Called automatically by the internal LVGL timer; exposed for testing
     void Update();
 
 private:
-    // ── Behavior per state ──────────────────────────────────────────────────
-
-    /**
-     * @brief Animasi saat Idle: gerakan mata pelan + kedipan acak + mulut diam.
-     * @param eye_h  Tinggi mata aktual (bisa dikurangi oleh fase blink)
-     */
+    // --- state machine helpers ---
     void IdleBehavior(int eye_h);
-
-    /**
-     * @brief Animasi saat Listening: mata asimetris menandakan perhatian + mulut kecil.
-     * @param eye_h  Tinggi mata aktual
-     */
     void ListeningBehavior(int eye_h);
-
-    /**
-     * @brief Animasi saat Speaking: mulut bergerak naik-turun acak + mata stabil.
-     * @param eye_h  Tinggi mata aktual
-     */
     void SpeakingBehavior(int eye_h);
 
-    /**
-     * @brief Terapkan dimensi mata ke kedua objek LVGL sekaligus.
-     * @param w  Lebar mata
-     * @param h  Tinggi mata
-     */
-    void ApplyEyeSize(int w, int h);
+    // --- layout helpers ---
+    void ApplyEyeSize(int eye_w, int eye_h);
+    void AlignEyes(int cx_offset, int cy_offset);
+    void AlignMouth(int mouth_w, int mouth_h, int cy_offset);
+    void SetIrisVisible(bool visible);
 
-    /**
-     * @brief Terapkan posisi mata dengan offset drift (idle) atau posisi tetap.
-     * @param dx  Horizontal offset dari posisi default
-     * @param dy  Vertical offset dari posisi default
-     */
-    void ApplyEyePosition(int dx, int dy);
+    // --- lvgl objects ---
+    lv_obj_t* screen_bg_   = nullptr;  // full-screen black background
+    lv_obj_t* left_eye_    = nullptr;
+    lv_obj_t* right_eye_   = nullptr;
+    lv_obj_t* left_iris_   = nullptr;
+    lv_obj_t* right_iris_  = nullptr;
+    lv_obj_t* left_pupil_  = nullptr;
+    lv_obj_t* right_pupil_ = nullptr;
+    lv_obj_t* mouth_       = nullptr;
 
-    // ── LVGL objects ────────────────────────────────────────────────────────
-    lv_obj_t* container_  = nullptr;  ///< Kanvas utama (background)
-    lv_obj_t* left_eye_   = nullptr;  ///< Mata kiri
-    lv_obj_t* right_eye_  = nullptr;  ///< Mata kanan
-    lv_obj_t* mouth_      = nullptr;  ///< Mulut
+    // --- display geometry (set in Init) ---
+    int disp_w_    = 240;
+    int disp_h_    = 240;
 
-    // ── State & konfigurasi ─────────────────────────────────────────────────
-    FaceStateLcd  state_ = FaceStateLcd::Idle;  ///< State animasi aktif
-    FaceLcdConfig cfg_;                          ///< Konfigurasi kalibrasi aktif
+    // Derived pixel values (computed in Init from ratios × disp dimensions)
+    int eye_size_base_   = 48;   // base eye height (px)
+    int eye_spacing_x_   = 53;   // px from centre to each eye centre
+    int eye_offset_y_    = -29;  // px from centre (negative = up)
+    int mouth_w_base_    = 43;   // base mouth width (px)
+    int mouth_offset_y_  = 67;   // px below centre
 
-    // ── Variabel animasi Idle ───────────────────────────────────────────────
-    int idle_dx_ = 0;  ///< Drift X mata saat idle
-    int idle_dy_ = 0;  ///< Drift Y mata saat idle
+    // --- animation state ---
+    FaceState state_      = FaceState::Idle;
 
-    // ── Variabel kedipan ────────────────────────────────────────────────────
-    int blink_phase_ = 0;  ///< Fase blink: 0=normal, 1-3=menutup/membuka
+    // Blink
+    int  blink_phase_     = 0;
 
-    // ── Variabel animasi Speaking ───────────────────────────────────────────
-    uint32_t speak_last_ms_   = 0;   ///< Timestamp terakhir pergantian target mulut
-    int      speak_target_h_  = 10;  ///< Tinggi target mulut saat speaking
-    int      speak_current_h_ = 10;  ///< Tinggi mulut aktual saat ini (smooth)
+    // Idle gaze drift
+    int  idle_offset_x_   = 0;
+    int  idle_offset_y_   = 0;
+    int  idle_drift_cnt_  = 0;
+
+    // Speaking mouth
+    uint32_t speak_last_update_  = 0;
+    int      speak_mouth_target_ = 4;
+    int      speak_mouth_current_= 4;
 };
